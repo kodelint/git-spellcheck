@@ -1,0 +1,119 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'  # Match version tags like v0.1.0
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            arch: x86_64
+            target: x86_64-unknown-linux-gnu
+          - os: ubuntu-latest
+            arch: aarch64
+            target: aarch64-unknown-linux-gnu
+          - os: macos-14            # Apple Silicon runner
+            arch: aarch64
+            target: aarch64-apple-darwin
+          - os: macos-latest
+            arch: x86_64
+            target: x86_64-apple-darwin
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Rust toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          profile: minimal
+          override: true
+          target: ${{ matrix.target }}
+
+      - name: Install libhunspell-dev and cross compilers (Linux only)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libhunspell-dev gcc-aarch64-linux-gnu
+
+      - name: Download Hunspell dictionary files
+        run: |
+          mkdir -p src/assets
+          curl -fsSL -o src/assets/en_US.aff https://cgit.freedesktop.org/libreoffice/dictionaries/plain/en/en_US.aff
+          curl -fsSL -o src/assets/en_US.dic https://cgit.freedesktop.org/libreoffice/dictionaries/plain/en/en_US.dic
+
+      - name: Build release binary
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: git-spellcheck-${{ matrix.os }}-${{ matrix.arch }}
+          path: target/${{ matrix.target }}/release/git-spellcheck
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v3
+        with:
+          path: ./artifacts
+
+      - name: Compress binaries and generate checksums
+        run: |
+          mkdir -p dist
+          for f in ./artifacts/*/git-spellcheck; do
+            arch_name=$(basename "$(dirname "$f")" | sed 's/git-spellcheck-//')
+            archive="git-spellcheck-${arch_name}.tar.gz"
+            checksum="git-spellcheck-${arch_name}.sha256"
+
+            tar -czf dist/$archive -C "$(dirname "$f")" git-spellcheck
+            sha256sum dist/$archive > dist/$checksum
+          done
+
+      - name: Create GitHub Release
+        id: create_release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: Release ${{ github.ref_name }}
+          body_path: ./CHANGELOG.md
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload release assets using gh CLI
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Install GitHub CLI if not present
+          if ! command -v gh > /dev/null; then
+            echo "Installing GitHub CLI..."
+            if [[ "$OSTYPE" == "linux-gnu"* ]]; then
+              curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
+              sudo chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg
+              echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null
+              sudo apt update
+              sudo apt install gh -y
+            elif [[ "$OSTYPE" == "darwin"* ]]; then
+              brew install gh
+            fi
+          fi
+
+          for file in dist/*; do
+            echo "Uploading $file..."
+            gh release upload "${{ github.ref_name }}" "$file" --clobber
+          done
