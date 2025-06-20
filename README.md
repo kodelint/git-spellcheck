@@ -20,7 +20,7 @@ It can be used as a Git commit-msg hook to prevent commits with spelling mistake
 
 ### Pre-built Binaries
 
-Releases with pre-built binaries are available on GitHub [Releases](https://github.com/yourusername/git-spellcheck/releases).
+Releases with pre-built binaries are available on GitHub [Releases](https://github.com/kodelint/git-spellcheck/releases).
 
 Download the binary for your platform and add it to your PATH.
 
