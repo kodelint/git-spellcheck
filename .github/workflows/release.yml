@@ -1,0 +1,105 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'  # Run only on version tags like v1.2.3
+
+
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        arch: [x86_64]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          profile: minimal
+          override: true
+
+      - name: Install hunspell (macOS)
+        if: matrix.os == 'macos-latest'
+        run: brew install hunspell
+
+      - name: Symlink libhunspell for linker (macOS)
+        if: matrix.os == 'macos-latest'
+        run: ln -sf /opt/homebrew/Cellar/hunspell/1.7.2/lib/libhunspell-1.7.dylib /opt/homebrew/Cellar/hunspell/1.7.2/lib/libhunspell.dylib
+
+      - name: Set env for hunspell linking (macOS)
+        if: matrix.os == 'macos-latest'
+        run: |
+          echo "LIBRARY_PATH=/opt/homebrew/Cellar/hunspell/1.7.2/lib" >> $GITHUB_ENV
+          echo "CPATH=/opt/homebrew/Cellar/hunspell/1.7.2/include" >> $GITHUB_ENV
+          echo "PKG_CONFIG_PATH=/opt/homebrew/Cellar/hunspell/1.7.2/lib/pkgconfig" >> $GITHUB_ENV
+
+      - name: Install libhunspell-dev (Ubuntu)
+        if: matrix.os == 'ubuntu-latest'
+        run: sudo apt-get update && sudo apt-get install -y libhunspell-dev pkg-config build-essential
+
+      - name: Build release binary
+        run: cargo build --release
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: git-spellcheck-${{ matrix.os }}-${{ matrix.arch }}
+          path: target/release/git-spellcheck
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Download Linux artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: git-spellcheck-ubuntu-latest-x86_64
+          path: ./artifact/linux-x86_64
+
+      - name: Download macOS artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: git-spellcheck-macos-latest-x86_64
+          path: ./artifact/macos-x86_64
+
+      - name: Create GitHub Release
+        id: create_release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: Release ${{ github.ref_name }}
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.TOKEN }}
+
+      - name: Upload Linux binary to release
+        uses: actions/upload-release-asset@v1
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: ./artifact/linux-x86_64/git-spellcheck
+          asset_name: git-spellcheck-linux-x86_64
+          asset_content_type: application/octet-stream
+        env:
+          GITHUB_TOKEN: ${{ secrets.TOKEN }}
+
+      - name: Upload macOS binary to release
+        uses: actions/upload-release-asset@v1
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: ./artifact/macos-x86_64/git-spellcheck
+          asset_name: git-spellcheck-macos-x86_64
+          asset_content_type: application/octet-stream
+        env:
+          GITHUB_TOKEN: ${{ secrets.TOKEN }}
+
